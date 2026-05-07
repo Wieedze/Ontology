@@ -70,6 +70,68 @@ function colorForAtomType(type: string): string {
   return FALLBACK_NODE_COLOR;
 }
 
+// ─── Predicate categorization (Sofia-aware) ─────────────────────────
+//
+// Each triple edge is tinted by the semantic category of its predicate
+// rather than a single accent so the leader-facing demo reads as a
+// multi-axis graph at a glance: intentions warm, trust cool, tags
+// vivid, etc. Categories are matched by exact wire label so they
+// align with both the Ontology registry and Sofia's chainConfig.
+
+type EdgeCategory =
+  | 'intention'
+  | 'trust-positive'
+  | 'trust-negative'
+  | 'social'
+  | 'tag'
+  | 'context'
+  | 'other';
+
+const EDGE_CATEGORY_COLORS: Record<EdgeCategory, string> = {
+  intention: '#f59e0b',          // amber — visits_for_*
+  'trust-positive': '#10b981',   // emerald — trusts
+  'trust-negative': '#ef4444',   // red — distrust
+  social: '#3b82f6',             // blue — follow / member_of / owner_of / am / follows / memberOf
+  tag: '#a855f7',                // purple — has tag / taggedWith
+  context: '#94a3b8',            // slate — in context of (also dashed via kind)
+  other: 'var(--color-accent)',  // app accent — everything not Sofia-aligned
+};
+
+const SOFIA_INTENTION_LABELS = new Set([
+  'visits for work',
+  'visits for learning',
+  'visits for fun',
+  'visits for inspiration',
+  'visits for buying',
+  'visits for music',
+]);
+const SOFIA_SOCIAL_LABELS = new Set([
+  'follow',
+  'member_of',
+  'owner_of',
+  'am',
+  // include Ontology's existing camelCase forms so the demo graph reads
+  // coherently when both shapes coexist in a mixed-author triple set
+  'follows',
+  'memberOf',
+]);
+const SOFIA_TAG_LABELS = new Set(['has tag', 'taggedWith']);
+
+function categoryForPredicateLabel(label: string): EdgeCategory {
+  if (SOFIA_INTENTION_LABELS.has(label)) return 'intention';
+  if (label === 'trusts') return 'trust-positive';
+  if (label === 'distrust') return 'trust-negative';
+  if (SOFIA_SOCIAL_LABELS.has(label)) return 'social';
+  if (SOFIA_TAG_LABELS.has(label)) return 'tag';
+  if (label === 'in context of') return 'context';
+  return 'other';
+}
+
+function colorForEdge(edge: TripleEdgeRaw): string {
+  if (edge.kind === 'context') return EDGE_CATEGORY_COLORS.context;
+  return EDGE_CATEGORY_COLORS[categoryForPredicateLabel(edge.predicateLabel)];
+}
+
 function categoryForAtomType(type: string): AtomCategory | 'live' {
   const atom = ATOM_TYPES.find((t) => t.id === type);
   return atom?.category ?? 'live';
@@ -316,7 +378,7 @@ export function LiveInstanceGraph({
       .selectAll<SVGLineElement, TripleEdgeRaw>('line')
       .data(links)
       .join('line')
-      .attr('stroke', 'var(--color-accent)')
+      .attr('stroke', (d) => colorForEdge(d))
       .attr('stroke-width', (d) => (d.kind === 'context' ? 0.8 : 1))
       .attr('stroke-opacity', (d) => (d.kind === 'context' ? 0.3 : 0.45))
       // Dashed orbits visually distinguish nested 'in context of' links
@@ -594,6 +656,7 @@ export function LiveInstanceGraph({
               </button>
             </div>
           </div>
+          <EdgeCategoryLegend />
         </div>
 
         <div ref={containerRef} className="w-full flex-1 min-h-0">
@@ -630,5 +693,36 @@ function FullscreenIcon() {
       <line x1="14" y1="2" x2="9.5" y2="6.5" />
       <line x1="2" y1="14" x2="6.5" y2="9.5" />
     </svg>
+  );
+}
+
+const EDGE_CATEGORY_ITEMS: Array<{ label: string; color: string; dashed?: boolean }> = [
+  { label: 'Intentions', color: EDGE_CATEGORY_COLORS.intention },
+  { label: 'Trust', color: EDGE_CATEGORY_COLORS['trust-positive'] },
+  { label: 'Distrust', color: EDGE_CATEGORY_COLORS['trust-negative'] },
+  { label: 'Social', color: EDGE_CATEGORY_COLORS.social },
+  { label: 'Tags', color: EDGE_CATEGORY_COLORS.tag },
+  { label: 'Context', color: EDGE_CATEGORY_COLORS.context, dashed: true },
+];
+
+function EdgeCategoryLegend() {
+  return (
+    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--color-text-muted)]">
+      {EDGE_CATEGORY_ITEMS.map((item) => (
+        <span key={item.label} className="inline-flex items-center gap-1.5">
+          <span
+            className="inline-block h-[2px] w-3.5"
+            style={{
+              backgroundColor: item.dashed === true ? 'transparent' : item.color,
+              backgroundImage:
+                item.dashed === true
+                  ? `repeating-linear-gradient(to right, ${item.color} 0, ${item.color} 3px, transparent 3px, transparent 6px)`
+                  : undefined,
+            }}
+          />
+          {item.label}
+        </span>
+      ))}
+    </div>
   );
 }
