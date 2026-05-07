@@ -8,6 +8,7 @@ import { RecentLiveClaimsCard } from '../components/recent-live-claims-card';
 import { PredicateExplorer } from '../components/predicate-explorer';
 import { ClaimHistory } from '../components/claim-history';
 import { BatchBuilder } from '../components/batch-builder';
+import { SofiaSeedButton } from '../components/sofia-seed-button';
 import { useClaimWorkspace } from '../lib/use-claim-workspace';
 
 export function HomePage() {
@@ -41,6 +42,7 @@ export function HomePage() {
 
   return (
     <main className="px-4 sm:px-6 py-8 space-y-8">
+      <SofiaSeedButton />
       <div className="space-y-3" data-tutorial-step="claim-builder">
         <ClaimBuilder
           ref={claimBuilderRef}
