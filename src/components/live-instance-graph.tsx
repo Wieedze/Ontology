@@ -34,9 +34,14 @@ interface TripleEdgeRaw extends d3.SimulationLinkDatum<AtomNode> {
   target: string;
   predicateLabel: string;
   termId: string;
-  /** 'context' marks an `in context of` orbit edge (rendered dashed,
-   *  always attaches a topic atom to the parent triple's object). */
+  /** 'context' marks an `in context of` orbit edge — rendered dashed
+   *  with its tip aimed at the midpoint of the parent triple edge so
+   *  the topic visually qualifies the *visit*, not the URL endpoint. */
   kind: 'triple' | 'context';
+  /** For context edges: the parent triple's subject (User). The
+   *  parent's object is already this edge's `target` (URL). The two
+   *  positions feed the midpoint computed each simulation tick. */
+  parentSubjectId?: string;
 }
 
 interface TripleEdgeLive extends d3.SimulationLinkDatum<AtomNode> {
@@ -45,6 +50,7 @@ interface TripleEdgeLive extends d3.SimulationLinkDatum<AtomNode> {
   predicateLabel: string;
   termId: string;
   kind: 'triple' | 'context';
+  parentSubjectId?: string;
 }
 
 const isLive = (l: d3.SimulationLinkDatum<AtomNode>): l is TripleEdgeLive =>
@@ -222,6 +228,7 @@ function buildInstanceGraph(
           predicateLabel: 'in context of',
           termId: ctx.term_id,
           kind: 'context',
+          parentSubjectId: subject.term_id,
         });
       }
     }
@@ -480,15 +487,50 @@ export function LiveInstanceGraph({
         link.attr('stroke-opacity', 0.45);
       });
 
+    // Lookup so context edges can resolve their parent's subject node
+    // (the User) by id without scanning `nodes` on every tick.
+    const nodeById = new Map<string, AtomNode>(nodes.map((n) => [n.id, n]));
+
     // Tick handler: positions DOM elements to match simulation state.
     // Extracted so we can call it once manually after pre-warm to draw
     // the converged layout, then leave the simulation stopped.
+    //
+    // Context edges (`kind === 'context'`) override their tip endpoint
+    // to the *midpoint* of the parent triple edge. Visually the dashed
+    // line then aims at the intention edge itself, surfacing the nested
+    // semantic — the topic qualifies the visit, not the URL — instead
+    // of reading like a redundant `has tag`. The dash starts at the
+    // topic node (d.source) and ends at midpoint(parentSubject, target).
     const applyPositions = (): void => {
       link
         .attr('x1', (d) => (isLive(d) ? d.source.x ?? 0 : 0))
         .attr('y1', (d) => (isLive(d) ? d.source.y ?? 0 : 0))
-        .attr('x2', (d) => (isLive(d) ? d.target.x ?? 0 : 0))
-        .attr('y2', (d) => (isLive(d) ? d.target.y ?? 0 : 0));
+        .attr('x2', (d) => {
+          if (
+            d.kind === 'context' &&
+            d.parentSubjectId !== undefined &&
+            isLive(d)
+          ) {
+            const parentSrc = nodeById.get(d.parentSubjectId);
+            if (parentSrc?.x !== undefined && d.target.x !== undefined) {
+              return (parentSrc.x + d.target.x) / 2;
+            }
+          }
+          return isLive(d) ? d.target.x ?? 0 : 0;
+        })
+        .attr('y2', (d) => {
+          if (
+            d.kind === 'context' &&
+            d.parentSubjectId !== undefined &&
+            isLive(d)
+          ) {
+            const parentSrc = nodeById.get(d.parentSubjectId);
+            if (parentSrc?.y !== undefined && d.target.y !== undefined) {
+              return (parentSrc.y + d.target.y) / 2;
+            }
+          }
+          return isLive(d) ? d.target.y ?? 0 : 0;
+        });
       node.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
     };
     simulation.on('tick', applyPositions);
