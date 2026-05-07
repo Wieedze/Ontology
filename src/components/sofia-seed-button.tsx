@@ -1,9 +1,30 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useAccount, useChainId } from 'wagmi';
 
 import { env } from '../config/env';
 import { buildSofiaSeed } from '../data/sofia-seed';
 import { useSubmitBatch } from '../intuition/hooks/use-submit-batch';
+import { useLocalStorage } from '../lib/use-local-storage';
+import type { ClaimSubmissionDraft } from '../intuition/services/claim-submission.service';
+
+/**
+ * Deterministic short hash of the seed drafts. Used as a versioning
+ * fingerprint so the publish button auto-hides once a given seed has
+ * been confirmed on-chain — but reappears the moment the seed
+ * definition is edited (any change to subject/predicate/object across
+ * any draft flips the hash). FNV-1a-style accumulation; cryptographic
+ * strength isn't needed since we're just gating UI visibility.
+ */
+function fingerprintSeed(drafts: ClaimSubmissionDraft[]): string {
+  let hash = 0;
+  for (const d of drafts) {
+    const s = `${d.subject}|${d.subjectType}|${d.predicateLabel}|${d.object}|${d.objectType}`;
+    for (let i = 0; i < s.length; i += 1) {
+      hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+    }
+  }
+  return String(hash);
+}
 
 /**
  * One-click "publish the demo seed" affordance for the Sofia interop
@@ -21,11 +42,37 @@ export function SofiaSeedButton(): JSX.Element | null {
   const { address, isConnected, chain } = useAccount();
   const walletChainId = useChainId();
   const submitBatch = useSubmitBatch();
+  // Persist the fingerprint of the most recently confirmed seed across
+  // reloads so the publish button stays hidden once the demo data is
+  // already live on-chain. Editing the seed (length or any draft
+  // content) flips the fingerprint, the button reappears, and the next
+  // confirmation re-pins it.
+  const [publishedFingerprint, setPublishedFingerprint] = useLocalStorage<
+    string | null
+  >('ontology.sofia-seed.published-fingerprint', null);
 
   const seed = useMemo(() => {
     if (address === undefined) return null;
     return buildSofiaSeed(address);
   }, [address]);
+
+  const currentFingerprint = useMemo(
+    () => (seed === null ? null : fingerprintSeed(seed.drafts)),
+    [seed]
+  );
+
+  // Pin the fingerprint as soon as the batch confirms so a follow-up
+  // page reload finds the button hidden. Effect rather than inlining
+  // in submit() because the confirmation arrives asynchronously after
+  // the indexer round-trip.
+  useEffect(() => {
+    if (
+      submitBatch.state.status === 'confirmed' &&
+      currentFingerprint !== null
+    ) {
+      setPublishedFingerprint(currentFingerprint);
+    }
+  }, [submitBatch.state.status, currentFingerprint, setPublishedFingerprint]);
 
   const isPublishing =
     submitBatch.state.status === 'preparing' ||
@@ -55,6 +102,14 @@ export function SofiaSeedButton(): JSX.Element | null {
 
   if (seed === null) return null;
   if (!isConnected) return null;
+  // Already published this exact seed in a prior session — stay hidden
+  // until the seed definition itself changes (fingerprint flips).
+  if (
+    currentFingerprint !== null &&
+    publishedFingerprint === currentFingerprint
+  ) {
+    return null;
+  }
 
   return (
     <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-4 py-3 flex items-center justify-between gap-3">
