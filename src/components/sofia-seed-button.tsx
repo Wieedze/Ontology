@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount, useChainId } from 'wagmi';
 
+import { env } from '../config/env';
 import { buildSofiaSeed } from '../data/sofia-seed';
 import { useSubmitBatch } from '../intuition/hooks/use-submit-batch';
 
@@ -17,7 +18,8 @@ import { useSubmitBatch } from '../intuition/hooks/use-submit-batch';
  * not cluttered.
  */
 export function SofiaSeedButton(): JSX.Element | null {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chain } = useAccount();
+  const walletChainId = useChainId();
   const submitBatch = useSubmitBatch();
 
   const seed = useMemo(() => {
@@ -29,6 +31,22 @@ export function SofiaSeedButton(): JSX.Element | null {
     submitBatch.state.status === 'preparing' ||
     submitBatch.state.status === 'creating-atoms' ||
     submitBatch.state.status === 'creating-triple';
+
+  // Diagnose why the publish action might be unavailable so the button
+  // can surface a precise reason instead of just disabling itself
+  // silently. Order matters: `isReady` requires both a matching chain
+  // and a loaded session, so a wrong-chain wallet would otherwise read
+  // as "session loading" forever.
+  const onWrongChain = walletChainId !== env.chainId;
+  const disabledReason: string | null = !isConnected
+    ? 'Connect your wallet to publish'
+    : onWrongChain
+      ? `Switch your wallet to chain ${env.chainId} (currently on ${walletChainId})`
+      : !submitBatch.isReady
+        ? 'Loading Intuition session…'
+        : isPublishing
+          ? 'Publishing in progress'
+          : null;
 
   const handlePublish = useCallback(() => {
     if (seed === null) return;
@@ -46,11 +64,20 @@ export function SofiaSeedButton(): JSX.Element | null {
           Publish {seed.drafts.length} triples covering every Sofia
           predicate category (intentions, trust, social, tags). Your
           connected EOA is included as the `me` user.
+          {chain !== undefined && (
+            <span className="ml-1 text-[var(--color-text-muted)]">
+              · Network: {chain.name} (chain {chain.id})
+            </span>
+          )}
         </p>
+        {disabledReason !== null && (
+          <p className="mt-1 text-[11px] text-amber-300/80">{disabledReason}</p>
+        )}
       </div>
       <button
         onClick={handlePublish}
-        disabled={!submitBatch.isReady || isPublishing}
+        disabled={disabledReason !== null}
+        title={disabledReason ?? `Publish ${seed.drafts.length} claims in 2 transactions`}
         className="focus-ring shrink-0 rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
       >
         {isPublishing ? 'Publishing…' : `Publish seed (${seed.drafts.length})`}
