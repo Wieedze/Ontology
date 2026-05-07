@@ -260,6 +260,40 @@ export function LiveInstanceGraph({
   const linkSelRef = useRef<d3.Selection<SVGLineElement, TripleEdgeRaw, SVGGElement, unknown> | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
+  // Toggle-multiselect filter on the legend chips. Empty set means
+  // "no filter applied — all categories visible at default opacity".
+  // Storing both the state (for the JSX legend) and a ref (for D3
+  // callbacks invoked outside React's render cycle, e.g. mouseleave).
+  const [activeCategories, setActiveCategories] = useState<Set<EdgeCategory>>(
+    new Set()
+  );
+  const activeCategoriesRef = useRef(activeCategories);
+  activeCategoriesRef.current = activeCategories;
+
+  // Default stroke opacity for a link, taking the legend filter into
+  // account. Used both at render time and in the mouseleave/deselect
+  // resets so the filter sticks when transient overlays clear.
+  const baseLinkOpacity = useCallback(
+    (edge: TripleEdgeRaw): number => {
+      const filter = activeCategoriesRef.current;
+      const inactive = filter.size > 0 && !filter.has(edge.kind === 'context'
+        ? 'context'
+        : categoryForPredicateLabel(edge.predicateLabel)
+      );
+      if (inactive) return 0.05;
+      return edge.kind === 'context' ? 0.3 : 0.45;
+    },
+    []
+  );
+
+  const handleToggleCategory = useCallback((cat: EdgeCategory) => {
+    setActiveCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }, []);
 
   // Stable callback ref so D3 click handlers don't go stale
   const onSelectAtomRef = useRef(onSelectAtom);
@@ -387,7 +421,7 @@ export function LiveInstanceGraph({
       .join('line')
       .attr('stroke', (d) => colorForEdge(d))
       .attr('stroke-width', (d) => (d.kind === 'context' ? 0.8 : 1))
-      .attr('stroke-opacity', (d) => (d.kind === 'context' ? 0.3 : 0.45))
+      .attr('stroke-opacity', (d) => baseLinkOpacity(d))
       // Dashed orbits visually distinguish nested 'in context of' links
       // from primary triple edges without fighting the intention edge for
       // weight. Context links also drop the arrowhead — the relationship
@@ -484,7 +518,9 @@ export function LiveInstanceGraph({
       .on('mouseleave', () => {
         node.select('circle').attr('opacity', 1);
         node.select('text').attr('opacity', 1);
-        link.attr('stroke-opacity', 0.45);
+        // Reset to the filter-aware base opacity instead of a hardcoded
+        // value so the legend filter sticks after a hover ends.
+        link.attr('stroke-opacity', (l) => baseLinkOpacity(l));
       });
 
     // Lookup so context edges can resolve their parent's subject node
@@ -550,6 +586,17 @@ export function LiveInstanceGraph({
     };
   }, [nodes, links, isFullscreen]);
 
+  // Re-apply the base link opacity whenever the legend filter changes
+  // so toggling a category in/out is reflected immediately. Skipped
+  // when a hover or selection overlay is active — those write their
+  // own opacity values; the next mouseleave / deselect will restore
+  // the filter-aware baseline via baseLinkOpacity.
+  useEffect(() => {
+    const link = linkSelRef.current;
+    if (link === null) return;
+    link.attr('stroke-opacity', (l) => baseLinkOpacity(l));
+  }, [activeCategories, baseLinkOpacity]);
+
   // Apply the externally-driven `selectedAtomId` highlight without
   // rebuilding the simulation: dim everything except the selected
   // node and its immediate neighbors, scale the selected node up.
@@ -565,7 +612,9 @@ export function LiveInstanceGraph({
         .attr('stroke-width', 1.5)
         .attr('opacity', 1);
       node.select('text').attr('opacity', 1).attr('font-weight', '500');
-      link.attr('stroke-opacity', 0.45);
+      // Restore the filter-aware base opacity so a deselection doesn't
+      // wipe an active legend filter.
+      link.attr('stroke-opacity', (l) => baseLinkOpacity(l));
       return;
     }
 
@@ -698,7 +747,10 @@ export function LiveInstanceGraph({
               </button>
             </div>
           </div>
-          <EdgeCategoryLegend />
+          <EdgeCategoryLegend
+            active={activeCategories}
+            onToggle={handleToggleCategory}
+          />
         </div>
 
         <div ref={containerRef} className="w-full flex-1 min-h-0">
@@ -738,33 +790,71 @@ function FullscreenIcon() {
   );
 }
 
-const EDGE_CATEGORY_ITEMS: Array<{ label: string; color: string; dashed?: boolean }> = [
-  { label: 'Intentions', color: EDGE_CATEGORY_COLORS.intention },
-  { label: 'Trust', color: EDGE_CATEGORY_COLORS['trust-positive'] },
-  { label: 'Distrust', color: EDGE_CATEGORY_COLORS['trust-negative'] },
-  { label: 'Social', color: EDGE_CATEGORY_COLORS.social },
-  { label: 'Tags', color: EDGE_CATEGORY_COLORS.tag },
-  { label: 'Context', color: EDGE_CATEGORY_COLORS.context, dashed: true },
+const EDGE_CATEGORY_ITEMS: Array<{
+  label: string;
+  category: EdgeCategory;
+  color: string;
+  dashed?: boolean;
+}> = [
+  { label: 'Intentions', category: 'intention',       color: EDGE_CATEGORY_COLORS.intention },
+  { label: 'Trust',      category: 'trust-positive',  color: EDGE_CATEGORY_COLORS['trust-positive'] },
+  { label: 'Distrust',   category: 'trust-negative',  color: EDGE_CATEGORY_COLORS['trust-negative'] },
+  { label: 'Social',     category: 'social',          color: EDGE_CATEGORY_COLORS.social },
+  { label: 'Tags',       category: 'tag',             color: EDGE_CATEGORY_COLORS.tag },
+  { label: 'Context',    category: 'context',         color: EDGE_CATEGORY_COLORS.context, dashed: true },
 ];
 
-function EdgeCategoryLegend() {
+function EdgeCategoryLegend({
+  active,
+  onToggle,
+}: {
+  active: Set<EdgeCategory>;
+  onToggle: (cat: EdgeCategory) => void;
+}) {
+  // Empty active set is the implicit "all categories visible" state
+  // — no chip is highlighted and the graph shows everything at full
+  // opacity. As soon as the user selects one, only the selected ones
+  // stay bright and the others fade.
+  const noFilter = active.size === 0;
   return (
-    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--color-text-muted)]">
-      {EDGE_CATEGORY_ITEMS.map((item) => (
-        <span key={item.label} className="inline-flex items-center gap-1.5">
-          <span
-            className="inline-block h-[2px] w-3.5"
-            style={{
-              backgroundColor: item.dashed === true ? 'transparent' : item.color,
-              backgroundImage:
-                item.dashed === true
-                  ? `repeating-linear-gradient(to right, ${item.color} 0, ${item.color} 3px, transparent 3px, transparent 6px)`
-                  : undefined,
-            }}
-          />
-          {item.label}
-        </span>
-      ))}
+    <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px]">
+      {EDGE_CATEGORY_ITEMS.map((item) => {
+        const isActive = active.has(item.category);
+        const isMuted = !noFilter && !isActive;
+        return (
+          <button
+            key={item.label}
+            type="button"
+            onClick={() => onToggle(item.category)}
+            className={`focus-ring inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors ${
+              isActive
+                ? 'bg-[var(--color-surface-raised)] text-[var(--color-text)]'
+                : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'
+            }`}
+            aria-pressed={isActive}
+            title={
+              isActive
+                ? `Hide ${item.label}`
+                : noFilter
+                  ? `Show only ${item.label}`
+                  : `Add ${item.label} to filter`
+            }
+            style={{ opacity: isMuted ? 0.55 : 1 }}
+          >
+            <span
+              className="inline-block h-[2px] w-3.5"
+              style={{
+                backgroundColor: item.dashed === true ? 'transparent' : item.color,
+                backgroundImage:
+                  item.dashed === true
+                    ? `repeating-linear-gradient(to right, ${item.color} 0, ${item.color} 3px, transparent 3px, transparent 6px)`
+                    : undefined,
+              }}
+            />
+            {item.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
