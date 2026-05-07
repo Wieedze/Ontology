@@ -20,12 +20,40 @@ import type { ClaimSubmissionDraft } from '../intuition/services/claim-submissio
  * to what the extension would surface — modulo the atom hash divergence
  * between the two pin pipelines, see follow-up note in the bounty PR.
  */
+/**
+ * Specification of a nested `in context of` orbit. Stored as a
+ * (parentDraft selector, topic) pair rather than concrete IDs because
+ * the parent triple's id is only known after the flat batch confirms.
+ * The publisher matches each orbit against the flat results by
+ * (subject, predicate, object) tuple to recover the parent's TripleId
+ * and the topic atom's AtomId, then drives the nested phase from there.
+ */
+export interface SofiaContextOrbitSpec {
+  parent: {
+    subject: string;
+    subjectType: string;
+    predicateLabel: string;
+    object: string;
+    objectType: string;
+  };
+  /** Topic atom that qualifies the parent. The label/type pair must
+   *  appear elsewhere in `drafts` (typically as the object of a
+   *  `has tag` triple) so the publisher can recover its AtomId from
+   *  the flat-batch result without an extra round-trip. */
+  topic: { label: string; type: string };
+}
+
 export interface SofiaSeed {
   /** Human-readable label of every atom involved in the seed. Useful
    *  for displaying a preview before the user signs the batch. */
   atoms: Array<{ label: string; type: string }>;
   /** Concrete claim drafts to feed into useSubmitBatch.submit(). */
   drafts: ClaimSubmissionDraft[];
+  /** Nested `in context of` orbits qualifying intention triples
+   *  (Sofia interop pattern). Published in a second phase after the
+   *  flat batch confirms; resolved against `drafts` to recover the
+   *  parent TripleId and topic AtomId. */
+  contextOrbits: SofiaContextOrbitSpec[];
 }
 
 export function buildSofiaSeed(userEoa: string): SofiaSeed {
@@ -174,5 +202,64 @@ export function buildSofiaSeed(userEoa: string): SofiaSeed {
     t(urls.paulGraham, 'WebPage', 'has tag', topics.growth, 'DefinedTerm'),
   ];
 
-  return { atoms, drafts };
+  // ─── Context orbits (Sofia nested-triple pattern) ────────────────
+  // Each entry attaches a topic to a specific intention edge — the
+  // semantic difference vs `has tag` is that the topic qualifies the
+  // *visit*, not the URL in absolute. So the same arxiv URL can be
+  // 'AI' when me visits it for learning and 'Science' when bob visits
+  // it for work. The publisher will resolve each parent's TripleId
+  // and the topic's AtomId from the flat batch result before driving
+  // the nested createTriples call.
+  const contextOrbits: SofiaContextOrbitSpec[] = [
+    // me's profile
+    {
+      parent: { subject: me, subjectType: 'Person', predicateLabel: 'visits for learning', object: urls.arxivPaper, objectType: 'WebPage' },
+      topic: { label: topics.science, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: me, subjectType: 'Person', predicateLabel: 'visits for work', object: urls.githubIntuition, objectType: 'WebPage' },
+      topic: { label: topics.web3, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: me, subjectType: 'Person', predicateLabel: 'visits for inspiration', object: urls.intuitionSite, objectType: 'WebPage' },
+      topic: { label: topics.web3, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: me, subjectType: 'Person', predicateLabel: 'visits for inspiration', object: urls.paulGraham, objectType: 'WebPage' },
+      topic: { label: topics.business, type: 'DefinedTerm' },
+    },
+    // alice's profile
+    {
+      parent: { subject: alice, subjectType: 'Person', predicateLabel: 'visits for work', object: urls.figmaCommunity, objectType: 'WebPage' },
+      topic: { label: topics.design, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: alice, subjectType: 'Person', predicateLabel: 'visits for inspiration', object: urls.dribbble, objectType: 'WebPage' },
+      topic: { label: topics.design, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: alice, subjectType: 'Person', predicateLabel: 'visits for music', object: urls.bandcamp, objectType: 'WebPage' },
+      topic: { label: topics.music, type: 'DefinedTerm' },
+    },
+    // bob's profile — same arxiv URL, different intention/context vs me
+    {
+      parent: { subject: bob, subjectType: 'Person', predicateLabel: 'visits for work', object: urls.arxivPaper, objectType: 'WebPage' },
+      topic: { label: topics.science, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: bob, subjectType: 'Person', predicateLabel: 'visits for learning', object: urls.natureArticle, objectType: 'WebPage' },
+      topic: { label: topics.science, type: 'DefinedTerm' },
+    },
+    // charlie's profile
+    {
+      parent: { subject: charlie, subjectType: 'Person', predicateLabel: 'visits for work', object: urls.yCombinator, objectType: 'WebPage' },
+      topic: { label: topics.business, type: 'DefinedTerm' },
+    },
+    {
+      parent: { subject: charlie, subjectType: 'Person', predicateLabel: 'visits for learning', object: urls.substackGrowth, objectType: 'WebPage' },
+      topic: { label: topics.growth, type: 'DefinedTerm' },
+    },
+  ];
+
+  return { atoms, drafts, contextOrbits };
 }

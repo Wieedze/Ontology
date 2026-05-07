@@ -426,4 +426,118 @@ export class ClaimSubmissionService {
       tripleTxHash: tripleExistsFlags[i] === true ? undefined : tripleTxHash,
     }));
   }
+
+  /**
+   * Publishes a batch of nested `in context of` triples — the Sofia
+   * pattern where a topic atom qualifies an existing intention triple
+   * (parent.subject = User, parent.object = URL, parent.predicate =
+   * 'visits for X'; nested.subject = parent.tripleId, nested.predicate
+   * = 'in context of', nested.object = topic atom).
+   *
+   * The flat `submit` / `submitBatch` path can't express this because
+   * its draft model takes string subject/object pairs that resolve to
+   * atoms — never to existing triples. This method takes already-
+   * resolved (parentTripleId, topicAtomId) pairs and handles only the
+   * predicate atom + the createTriples call.
+   *
+   * Tx count:
+   *   - 1 createAtoms iff `in context of` is new on this chain
+   *     (resolve via findPredicateAtomsByLabel first; skip if found).
+   *   - 1 createTriples for the brand-new nested triples (skipped
+   *     when every orbit is already on-chain — no-op).
+   */
+  async submitContextOrbits(args: {
+    orbits: Array<{ parentTripleId: TripleId; topicAtomId: AtomId }>;
+    context: ClaimSubmissionContext;
+    onPhase?: (phase: ClaimSubmissionPhase) => void;
+  }): Promise<{
+    predicateAtomId: AtomId;
+    predicateAtomTxHash: Hex | undefined;
+    tripleTxHash: Hex | undefined;
+    results: Array<{ tripleId: TripleId; alreadyExisted: boolean }>;
+  }> {
+    const { orbits, context, onPhase } = args;
+    onPhase?.({ status: 'preparing' });
+
+    // 1. Resolve or pin+create the 'in context of' predicate atom.
+    //    Prefer an existing canonical (non-TextObject) atom so the
+    //    nested triples interlink with whatever Sofia (or anything else)
+    //    has already published under the same label on this chain.
+    const canonical =
+      await this.indexer.resolveCanonicalPredicateByLabel('in context of');
+    let predicateAtomId: AtomId;
+    let predicateAtomTxHash: Hex | undefined;
+    if (canonical !== null) {
+      predicateAtomId = asAtomId(canonical.term_id);
+    } else {
+      const pinUri = await this.pinning.pinThing({ name: 'in context of' });
+      const data = encodeAtomData(pinUri);
+      predicateAtomId = await this.multivaultRead.calculateAtomId(data);
+      const exists = await this.multivaultRead.isTermCreated(predicateAtomId);
+      if (!exists) {
+        onPhase?.({ status: 'creating-atoms', atomCount: 1 });
+        predicateAtomTxHash = await this.multivaultWrite.createAtoms({
+          datas: [data],
+          assets: [context.session.atomCost],
+          value: context.session.atomCost,
+          account: context.account,
+          chain: context.chain,
+        });
+      }
+    }
+
+    // 2. Compute every nested triple id and check existence in parallel.
+    const tripleIds = await Promise.all(
+      orbits.map((o) =>
+        this.multivaultRead.calculateTripleId(
+          o.parentTripleId,
+          predicateAtomId,
+          o.topicAtomId
+        )
+      )
+    );
+    const existsFlags = await Promise.all(
+      tripleIds.map((id) => this.multivaultRead.isTermCreated(id))
+    );
+
+    const newIndices: number[] = [];
+    for (let i = 0; i < orbits.length; i += 1) {
+      if (existsFlags[i] !== true) newIndices.push(i);
+    }
+
+    // 3. Single createTriples for the new nested entries (no-op when
+    //    every orbit was already on-chain).
+    let tripleTxHash: Hex | undefined;
+    if (newIndices.length > 0) {
+      onPhase?.({ status: 'creating-triple' });
+      const subjectIds: TripleId[] = newIndices.map(
+        (i) => orbits[i]!.parentTripleId
+      );
+      const predicateIds: AtomId[] = newIndices.map(() => predicateAtomId);
+      const objectIds: AtomId[] = newIndices.map(
+        (i) => orbits[i]!.topicAtomId
+      );
+      const assets = newIndices.map(() => context.session.tripleCost);
+      const value = context.session.tripleCost * BigInt(newIndices.length);
+      tripleTxHash = await this.multivaultWrite.createTriples({
+        subjectIds,
+        predicateIds,
+        objectIds,
+        assets,
+        value,
+        account: context.account,
+        chain: context.chain,
+      });
+    }
+
+    return {
+      predicateAtomId,
+      predicateAtomTxHash,
+      tripleTxHash,
+      results: orbits.map((_, i) => ({
+        tripleId: tripleIds[i]!,
+        alreadyExisted: existsFlags[i] === true,
+      })),
+    };
+  }
 }

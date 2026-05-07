@@ -39,7 +39,7 @@ export class MultiVaultReadService {
   }
 
   async calculateTripleId(
-    subjectId: AtomId,
+    subjectId: AtomId | TripleId,
     predicateId: AtomId,
     objectId: AtomId
   ): Promise<TripleId> {
@@ -71,7 +71,11 @@ export interface CreateAtomsArgs {
 }
 
 export interface CreateTriplesArgs {
-  subjectIds: AtomId[];
+  /** Each subject can be either an atom id (regular triple) or a triple
+   *  id (nested triple, e.g. `<parentTriple> --in context of--> <topic>`).
+   *  The contract's bytes32 input doesn't distinguish — only our type
+   *  layer does. The branded union here keeps caller intent explicit. */
+  subjectIds: Array<AtomId | TripleId>;
   predicateIds: AtomId[];
   objectIds: AtomId[];
   assets: bigint[];
