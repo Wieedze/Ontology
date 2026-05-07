@@ -115,6 +115,44 @@ const LIST_RECENT_TRIPLES = gql`
   }
 `;
 
+// Sofia interop: 'in context of' triples are nested — their subject is
+// another triple's term_id, not an atom. We fetch them by passing the
+// parent triple ids in `_in:` so the indexer returns only context
+// orbits relevant to triples already on screen.
+const LIST_CONTEXT_TRIPLES_FOR_PARENTS = gql`
+  query ListContextTriplesForParents($parentIds: [String!]!) {
+    triples(
+      where: {
+        subject_id: { _in: $parentIds }
+        predicate: { label: { _eq: "in context of" } }
+      }
+      order_by: { block_number: desc }
+    ) {
+      term_id
+      subject_id
+      predicate_id
+      object_id
+      created_at
+      creator_id
+      subject {
+        term_id
+        label
+        type
+      }
+      predicate {
+        term_id
+        label
+        type
+      }
+      object {
+        term_id
+        label
+        type
+      }
+    }
+  }
+`;
+
 interface FindPredicateAtomsByLabelResponse {
   atoms: PredicateAtomCandidate[];
 }
@@ -173,6 +211,24 @@ export class IndexerService {
     const data = await this.client.request<ListRecentTriplesResponse>(
       LIST_RECENT_TRIPLES,
       { limit: args.limit, offset: args.offset ?? 0 }
+    );
+    return data.triples;
+  }
+
+  /**
+   * Fetches nested `in context of` triples whose subject is one of the
+   * given parent triples. Used by the live graph to render topic
+   * orbits around intention edges (Sofia interop pattern). Returns an
+   * empty array when `parentTripleIds` is empty so callers can call
+   * unconditionally.
+   */
+  async listContextTriplesForParents(
+    parentTripleIds: Bytes32[]
+  ): Promise<JoinedTripleRecord[]> {
+    if (parentTripleIds.length === 0) return [];
+    const data = await this.client.request<ListRecentTriplesResponse>(
+      LIST_CONTEXT_TRIPLES_FOR_PARENTS,
+      { parentIds: parentTripleIds }
     );
     return data.triples;
   }
