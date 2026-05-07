@@ -3,7 +3,7 @@ import * as d3 from 'd3';
 import { ATOM_TYPES, ATOM_CATEGORIES, type AtomCategory } from '../data/atom-types';
 import { useBodyScrollLock } from '../lib/use-body-scroll-lock';
 import { D3_RESET_DURATION_MS } from '../lib/timings';
-import { useLiveTriples } from '../intuition/hooks/use-live-triples';
+import { useLiveTriplesWithContext } from '../intuition/hooks/use-live-triples-with-context';
 import type { JoinedTripleRecord } from '../intuition/services/graphql.service';
 
 /**
@@ -34,6 +34,9 @@ interface TripleEdgeRaw extends d3.SimulationLinkDatum<AtomNode> {
   target: string;
   predicateLabel: string;
   termId: string;
+  /** 'context' marks an `in context of` orbit edge (rendered dashed,
+   *  always attaches a topic atom to the parent triple's object). */
+  kind: 'triple' | 'context';
 }
 
 interface TripleEdgeLive extends d3.SimulationLinkDatum<AtomNode> {
@@ -41,6 +44,7 @@ interface TripleEdgeLive extends d3.SimulationLinkDatum<AtomNode> {
   target: AtomNode;
   predicateLabel: string;
   termId: string;
+  kind: 'triple' | 'context';
 }
 
 const isLive = (l: d3.SimulationLinkDatum<AtomNode>): l is TripleEdgeLive =>
@@ -76,9 +80,17 @@ function categoryForAtomType(type: string): AtomCategory | 'live' {
  * Skips triples whose subject/predicate/object joins resolved to null
  * (the indexer marks atoms as nullable when they've been pruned).
  * De-duplicates atoms across triples so the same `max` appears once.
+ *
+ * `contextByParent` (Sofia interop) attaches `in context of` topic
+ * orbits to their parent intention edge: the topic atom becomes a
+ * regular node and a `kind: 'context'` link connects it to the parent
+ * triple's object so the topic floats near the URL it qualifies. The
+ * dashed rendering downstream makes the relationship readable without
+ * fighting the primary intention edge for visual weight.
  */
 function buildInstanceGraph(
-  triples: JoinedTripleRecord[]
+  triples: JoinedTripleRecord[],
+  contextByParent: Map<string, JoinedTripleRecord[]>
 ): { nodes: AtomNode[]; links: TripleEdgeRaw[] } {
   const nodeMap = new Map<string, AtomNode>();
   const links: TripleEdgeRaw[] = [];
@@ -120,7 +132,37 @@ function buildInstanceGraph(
       target: object.term_id,
       predicateLabel: predicate.label || predicate.type,
       termId: triple.term_id,
+      kind: 'triple',
     });
+
+    // Sofia interop: attach `in context of` topic orbits to this triple.
+    // Each context triple's object is the topic atom; we link the topic
+    // to the parent triple's object (the URL the visit was about), so
+    // the topic visually orbits the URL it qualifies. The parent triple
+    // ID is the join key the indexer query was filtered by.
+    const orbits = contextByParent.get(triple.term_id);
+    if (orbits !== undefined) {
+      for (const ctx of orbits) {
+        const topic = ctx.object;
+        if (topic === null || topic === undefined) continue;
+        if (!nodeMap.has(topic.term_id)) {
+          nodeMap.set(topic.term_id, {
+            id: topic.term_id,
+            label: topic.label || topic.type,
+            type: topic.type,
+            category: categoryForAtomType(topic.type),
+            color: colorForAtomType(topic.type),
+          });
+        }
+        links.push({
+          source: topic.term_id,
+          target: object.term_id,
+          predicateLabel: 'in context of',
+          termId: ctx.term_id,
+          kind: 'context',
+        });
+      }
+    }
   }
 
   return { nodes: Array.from(nodeMap.values()), links };
@@ -154,11 +196,11 @@ export function LiveInstanceGraph({
   const onSelectAtomRef = useRef(onSelectAtom);
   onSelectAtomRef.current = onSelectAtom;
 
-  const liveTriplesQuery = useLiveTriples({ limit: 5000 });
+  const liveTriplesQuery = useLiveTriplesWithContext({ limit: 5000 });
   const { nodes, links } = useMemo(() => {
-    const triples = liveTriplesQuery.data;
-    if (triples === undefined) return { nodes: [], links: [] };
-    return buildInstanceGraph(triples);
+    const data = liveTriplesQuery.data;
+    if (data === undefined) return { nodes: [], links: [] };
+    return buildInstanceGraph(data.recent, data.contextByParent);
   }, [liveTriplesQuery.data]);
 
   const toggleFullscreen = useCallback(() => {
@@ -275,9 +317,14 @@ export function LiveInstanceGraph({
       .data(links)
       .join('line')
       .attr('stroke', 'var(--color-accent)')
-      .attr('stroke-width', 1)
-      .attr('stroke-opacity', 0.45)
-      .attr('marker-end', 'url(#live-arrowhead)')
+      .attr('stroke-width', (d) => (d.kind === 'context' ? 0.8 : 1))
+      .attr('stroke-opacity', (d) => (d.kind === 'context' ? 0.3 : 0.45))
+      // Dashed orbits visually distinguish nested 'in context of' links
+      // from primary triple edges without fighting the intention edge for
+      // weight. Context links also drop the arrowhead — the relationship
+      // is associative, not directional in the same sense as a triple.
+      .attr('stroke-dasharray', (d) => (d.kind === 'context' ? '3 3' : null))
+      .attr('marker-end', (d) => (d.kind === 'context' ? null : 'url(#live-arrowhead)'))
       .attr('data-edge-id', (_, i) => `edge-${i}`)
       .style('cursor', 'pointer')
       .on('mouseenter', (event: MouseEvent, d) => {
