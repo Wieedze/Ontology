@@ -14,6 +14,11 @@ export const PREDICATE_GROUPS = [
   'Blockchain & Onchain',
   'Content & Media',
   'Taxonomy & Classification',
+  // Sofia interop: browsing-intention predicates the extension publishes
+  // when users visit URLs. Grouped together so the picker surfaces them
+  // as a coherent "what-was-this-visit-for" axis rather than scattering
+  // them across other categories.
+  'Web Activity & Intentions',
 ] as const;
 
 export type PredicateSemanticGroup = (typeof PREDICATE_GROUPS)[number];
@@ -78,6 +83,20 @@ const PREDICATE_FORMS: Record<string, PredicateForm> = {
   memberOf: 'phrase',
   founderOf: 'phrase',
   worksAt: 'phrase',
+
+  // Sofia interop — exact wire labels preserved for atom matching
+  visits_for_work: 'phrase',
+  visits_for_learning: 'phrase',
+  visits_for_fun: 'phrase',
+  visits_for_inspiration: 'phrase',
+  visits_for_buying: 'phrase',
+  visits_for_music: 'phrase',
+  distrust: 'bare',
+  follow: 'bare',
+  member_of: 'phrase',
+  owner_of: 'phrase',
+  am: 'phrase',
+  has_tag: 'phrase',
   contributorTo: 'phrase',
   interestedIn: 'phrase',
   expertIn: 'phrase',
@@ -180,6 +199,29 @@ const PREDICATE_SEMANTICS: Record<string, { group: PredicateSemanticGroup; prior
   relatedTo:       { group: 'Taxonomy & Classification', priority: 2 },
   subConceptOf:    { group: 'Taxonomy & Classification', priority: 3 },
   oppositeOf:      { group: 'Taxonomy & Classification', priority: 4 },
+
+  // ─── Sofia interop ────────────────────────────────────────────────
+  // Browsing-intention predicates published by the Sofia extension.
+  // Labels match Sofia's chainConfig exactly so the predicate atoms
+  // resolve to the same on-chain term regardless of which app authored
+  // a triple (the indexer keys atoms by their pin hash).
+  visits_for_work:        { group: 'Web Activity & Intentions', priority: 1 },
+  visits_for_learning:    { group: 'Web Activity & Intentions', priority: 2 },
+  visits_for_fun:         { group: 'Web Activity & Intentions', priority: 3 },
+  visits_for_inspiration: { group: 'Web Activity & Intentions', priority: 4 },
+  visits_for_buying:      { group: 'Web Activity & Intentions', priority: 5 },
+  visits_for_music:       { group: 'Web Activity & Intentions', priority: 6 },
+
+  // Sofia-aligned bare/snake-case forms — kept distinct from Ontology's
+  // existing camelCase predicates because their on-chain labels differ
+  // (`follow` vs `follows`, `member_of` vs `memberOf`) and would resolve
+  // to different predicate atoms.
+  distrust:               { group: 'Identity & Trust', priority: 4 },
+  follow:                 { group: 'Identity & Trust', priority: 5 },
+  am:                     { group: 'Identity & Trust', priority: 6 },
+  member_of:              { group: 'Membership & Work', priority: 8 },
+  owner_of:               { group: 'Membership & Work', priority: 9 },
+  has_tag:                { group: 'Taxonomy & Classification', priority: 5 },
 };
 
 /**
@@ -282,6 +324,26 @@ const PREDICATE_DEFINITIONS: PredicateDefinition[] = [
   // ─── Generic ──────────────────────────────────────────────
   { id: 'isA', label: 'isA', description: 'Entity is an instance of type/concept', subjectTypes: ['Thing', 'Person', ...ORG_TYPES, ...SOFTWARE_TYPES, 'Product', 'Service'], objectTypes: ['DefinedTerm', 'Thing'] },
   { id: 'partOf', label: 'partOf', description: 'Entity is part of larger entity', subjectTypes: ['Thing', 'Person', 'WebPage', 'MusicRecording', 'PodcastEpisode', 'Article'], objectTypes: ['Thing', ...ORG_TYPES, 'MusicAlbum', 'PodcastSeries', 'Book', 'WebSite'] },
+
+  // ─── Sofia interop ────────────────────────────────────────
+  // IMPORTANT: the `label` field is the wire-format string used to
+  // resolve the predicate atom on-chain. It MUST stay byte-identical to
+  // the labels declared in Sofia's `chainConfig.PREDICATE_NAMES` —
+  // otherwise the two apps would publish to distinct predicate atoms
+  // and triples would fail to interlink. The local `id` follows Sofia's
+  // snake_case identifier convention to make that mapping explicit.
+  { id: 'visits_for_work',        label: 'visits for work',        description: 'Person visited URL with a work intention',                       subjectTypes: ['Person'], objectTypes: ['WebPage', 'WebSite'] },
+  { id: 'visits_for_learning',    label: 'visits for learning',    description: 'Person visited URL to learn something',                          subjectTypes: ['Person'], objectTypes: ['WebPage', 'WebSite'] },
+  { id: 'visits_for_fun',         label: 'visits for fun',         description: 'Person visited URL for entertainment',                           subjectTypes: ['Person'], objectTypes: ['WebPage', 'WebSite'] },
+  { id: 'visits_for_inspiration', label: 'visits for inspiration', description: 'Person visited URL to find inspiration',                         subjectTypes: ['Person'], objectTypes: ['WebPage', 'WebSite'] },
+  { id: 'visits_for_buying',      label: 'visits for buying',      description: 'Person visited URL to make a purchase decision',                 subjectTypes: ['Person'], objectTypes: ['WebPage', 'WebSite'] },
+  { id: 'visits_for_music',       label: 'visits for music',       description: 'Person visited URL to listen to or discover music',              subjectTypes: ['Person'], objectTypes: ['WebPage', 'WebSite'] },
+  { id: 'distrust',               label: 'distrust',               description: 'Subject does not trust the object',                              subjectTypes: ['Person', ...ORG_TYPES], objectTypes: ['Person', ...ORG_TYPES, 'DefinedTerm', 'Thing', 'WebSite'] },
+  { id: 'follow',                 label: 'follow',                 description: 'Subject follows the object on a platform',                       subjectTypes: ['Person'], objectTypes: ['Person', ...ORG_TYPES] },
+  { id: 'member_of',              label: 'member_of',              description: 'Subject is a member of organization (Sofia OAuth import)',       subjectTypes: ['Person'], objectTypes: [...ORG_TYPES, 'MusicGroup'] },
+  { id: 'owner_of',               label: 'owner_of',               description: 'Subject owns the object (Sofia OAuth import)',                   subjectTypes: ['Person'], objectTypes: [...ORG_TYPES, 'EthereumAccount', 'EthereumSmartContract', 'EthereumERC20', 'WebSite', 'Thing'] },
+  { id: 'am',                     label: 'am',                     description: 'Subject identifies as the object on a platform (OAuth binding)', subjectTypes: ['Person'], objectTypes: [...ORG_TYPES, 'WebPage', 'Thing'] },
+  { id: 'has_tag',                label: 'has tag',                description: 'Web page is tagged with a topic or label',                       subjectTypes: ['WebPage', 'WebSite'], objectTypes: ['DefinedTerm', 'Thing'] },
 ];
 
 /** Fallback for any future definitions missing from PREDICATE_SEMANTICS. */

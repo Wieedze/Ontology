@@ -38,6 +38,22 @@ const FIRST_PERSON_LABELS: Record<string, string> = {
   attendedEvent: 'attended',
   organizedEvent: 'organized',
   about: 'am about',
+
+  // Sofia interop — the wire labels stay third-person on-chain, but the
+  // first-person UI form drops the trailing 's' and re-anchors auxiliaries
+  // for predicates that read awkwardly with `I`.
+  visits_for_work: 'visit for work',
+  visits_for_learning: 'visit for learning',
+  visits_for_fun: 'visit for fun',
+  visits_for_inspiration: 'visit for inspiration',
+  visits_for_buying: 'visit for buying',
+  visits_for_music: 'visit for music',
+  distrust: 'distrust',
+  follow: 'follow',
+  member_of: 'am member of',
+  owner_of: 'own',
+  am: 'am',
+  has_tag: 'have tag',
 };
 
 /**
